@@ -1,0 +1,36 @@
+DAY 3 — SPLUNK DATA MAP
+
+SIEM
+Splunk Enterprise — Windows 11
+
+MONITORED ENDPOINT
+Windows 10 VM
+
+HOST
+Bunny
+
+FORWARDER
+Splunk Universal Forwarder
+
+INDEX
+main
+
+WINDOWS LOG SOURCES
+Security
+System
+Application
+
+ENDPOINT TELEMETRY
+Sysmon
+
+SYSMON SOURCE
+WinEventLog:Microsoft-Windows-Sysmon/Operational
+
+SYSMON SOURCETYPE
+WinEventLog:Microsoft-Windows-Sysmon/Operational
+
+TRANSPORT
+TCP 9997
+
+ATTACK SIMULATOR
+Kali Linux

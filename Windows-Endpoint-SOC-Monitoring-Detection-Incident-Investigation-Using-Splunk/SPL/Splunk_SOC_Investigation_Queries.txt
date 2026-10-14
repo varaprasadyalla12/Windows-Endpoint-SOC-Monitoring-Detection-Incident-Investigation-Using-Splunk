@@ -1,0 +1,380 @@
+WINDOWS ENDPOINT SOC MONITORING & INCIDENT INVESTIGATION USING SPLUNK
+SPL QUERY COLLECTION
+
+Project: Windows Endpoint SOC Monitoring & Incident Investigation Using Splunk
+SIEM: Splunk Enterprise on Windows 11
+Endpoint: Windows 10 VM
+Log Forwarding: Splunk Universal Forwarder
+Endpoint Telemetry: Windows Event Logs and Sysmon
+Index: main
+
+PURPOSE
+This document contains SPL searches for data validation, source
+identification, endpoint event monitoring, authentication investigations,
+process-creation analysis, and encoded PowerShell investigation.
+
+
+1. INITIAL INDEX VALIDATION
+======================================================================
+
+PURPOSE:
+Checks whether events are arriving in the main index.
+
+SPL:
+index=main
+
+
+2. TOTAL EVENT COUNT
+======================================================================
+
+PURPOSE:
+Counts the events currently available in the selected time range.
+
+SPL:
+index=main
+| stats count
+
+
+3. EVENTS BY SOURCE — RECOVERED
+======================================================================
+
+PURPOSE:
+Identifies the different event sources being collected by Splunk.
+
+SPL:
+index=main
+| stats count by source
+
+
+4. EVENTS BY HOST
+======================================================================
+
+PURPOSE:
+Shows how many events Splunk has collected from each host.
+
+SPL:
+index=main
+| stats count by host
+
+
+5. EVENTS BY EVENT CODE
+======================================================================
+
+PURPOSE:
+Summarises event volume by Windows or Sysmon event code.
+
+SPL:
+index=main
+| stats count by EventCode
+| sort - count
+
+
+6. WINDOWS SECURITY LOG VALIDATION
+======================================================================
+
+PURPOSE:
+Filters events from the Windows Security Event Log.
+
+SPL:
+index=main source="WinEventLog:Security"
+
+NOTE:
+The source value must match the source displayed in your actual events.
+
+
+7. WINDOWS SYSTEM LOG VALIDATION
+======================================================================
+
+PURPOSE:
+Checks whether Windows System events are arriving.
+
+SPL:
+index=main source="WinEventLog:System"
+
+NOTE:
+Confirm the source name in your Splunk events if this returns no results.
+
+
+8. WINDOWS APPLICATION LOG VALIDATION
+======================================================================
+
+PURPOSE:
+Checks whether Windows Application events are arriving.
+
+SPL:
+index=main source="WinEventLog:Application"
+
+NOTE:
+Confirm the source name in your Splunk events if this returns no results.
+
+
+9. SYSMON OPERATIONAL LOG VALIDATION
+======================================================================
+
+PURPOSE:
+Filters Sysmon Operational events forwarded by the Universal Forwarder.
+
+SPL:
+index=main source="WinEventLog:Microsoft-Windows-Sysmon/Operational"
+
+NOTE:
+This is the source path used in our earlier PowerShell investigation.
+Your installation may display a different source or sourcetype.
+
+
+10. SYSMON PROCESS CREATION — EVENT ID 1
+======================================================================
+
+PURPOSE:
+Finds Sysmon process-creation events.
+
+SPL:
+index=main source="WinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1
+
+WHAT TO INVESTIGATE:
+- Image: executable path
+- ParentImage: parent process path
+- CommandLine: process command line
+- User: account associated with the event
+- ProcessId: process identifier
+- _time: event timestamp
+
+
+11. NOTEPAD PROCESS-CREATION VALIDATION
+======================================================================
+
+PURPOSE:
+Checks whether the controlled notepad.exe test generated Sysmon process
+creation telemetry.
+
+SPL:
+index=main EventCode=1
+| search Image="*notepad.exe*"
+| table _time host User Image ParentImage CommandLine ProcessId
+| sort 0 - _time
+
+NOTE:
+We previously confirmed a Sysmon Event ID 1 for notepad.exe on the
+Windows endpoint. Validate the fields against that event.
+
+
+12. SYSMON CONFIGURATION-CHANGE EVENTS — EVENT ID 16
+======================================================================
+
+PURPOSE:
+Searches for Sysmon configuration-state change events.
+
+SPL:
+index=main source="WinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=16
+| table _time host EventCode source sourcetype
+| sort 0 - _time
+
+NOTE:
+Event ID 16 is associated with Sysmon configuration state changes.
+Results depend on whether such events were collected in your lab.
+
+
+13. FAILED WINDOWS LOGONS — EVENT ID 4625
+======================================================================
+
+PURPOSE:
+Investigates Windows failed-logon events.
+
+SPL:
+index=main source="WinEventLog:Security" EventCode=4625
+| table _time host Account_Name src_ip EventCode
+| sort 0 - _time
+
+NOTE:
+Account_Name and src_ip may not be the exact field names in every event.
+Inspect the raw event and use the fields available in your installation.
+
+
+14. ACCOUNT LOCKOUTS — EVENT ID 4740
+======================================================================
+
+PURPOSE:
+Searches for Windows account-lockout events.
+
+SPL:
+index=main source="WinEventLog:Security" EventCode=4740
+| table _time host Account_Name EventCode
+| sort 0 - _time
+
+NOTE:
+Event ID 4740 is generated when an account is locked out. Its availability
+depends on the Windows environment and collected Security logs.
+
+
+15. FAILED-LOGON BURST / BRUTE-FORCE TRIAGE — RECOVERED
+======================================================================
+
+PURPOSE:
+Groups failed logons into five-minute intervals and identifies account/time
+combinations with at least five failures in an interval.
+
+SPL:
+index=main source="WinEventLog:Security" EventCode=4625
+| bin _time span=5m
+| stats count as FailedLogins by _time Account_Name
+| where FailedLogins >= 5
+| sort - _time
+
+NOTE:
+This is a triage rule, not proof of a brute-force attack. The threshold is
+five failures per account per five-minute bucket. Validate the events,
+source systems, and surrounding activity before drawing conclusions.
+
+
+16. SYSMON POWERSHELL PROCESS INVESTIGATION — RECOVERED
+======================================================================
+
+PURPOSE:
+Finds recent Sysmon process-creation events associated with PowerShell,
+excluding events where the image or parent image contains "splunk".
+Returns up to 20 events for review.
+
+SPL:
+index=main source="WinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1
+| search Image="*powershell*"
+| search NOT Image="*splunk*"
+| search NOT ParentImage="*splunk*"
+| table _time User Image ParentImage CommandLine ProcessId
+| sort - _time
+| head 20
+
+WHAT TO REVIEW:
+- Whether PowerShell execution was expected
+- The parent process that launched PowerShell
+- The command-line arguments
+- The account running the process
+- Whether the activity matches an authorised test
+
+
+17. ENCODED POWERSHELL PARAMETER SEARCH
+======================================================================
+
+PURPOSE:
+Narrows Sysmon process-creation events to PowerShell commands containing
+the -EncodedCommand parameter.
+
+SPL:
+index=main source="WinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1
+| search Image="*powershell*"
+| search CommandLine="*-EncodedCommand*"
+| table _time host User Image ParentImage CommandLine ProcessId
+| sort 0 - _time
+
+NOTE:
+This is a parameter-based detection search. Encoded PowerShell may be used
+for legitimate administration as well as suspicious activity. Investigate
+the complete command line, parent process, user, and surrounding events.
+
+18. CONTROLLED POWERSHELL SIMULATION DETECTION — RECOVERED
+======================================================================
+
+PURPOSE:
+Searches the Windows endpoint for the marker used in our controlled
+SOC simulation test.
+
+SPL:
+index=main host="Bunny" EventCode=1
+| search Image="*\\powershell.exe" CommandLine="*SOC_SIMULATION_SUSPICIOUS_TEST*"
+| table _time User Image CommandLine ParentImage ProcessId
+| sort 0 - _time
+
+NOTE:
+"Bunny" is the host value used in our earlier query. Change it only if
+your actual event host value differs. The marker is specific to the
+controlled simulation and is not a general-purpose malware signature.
+
+
+19. CONTROLLED SIMULATION INVESTIGATION VIEW
+======================================================================
+
+PURPOSE:
+Adds a descriptive investigation label to matching simulation events.
+
+SPL:
+index=main host="Bunny" EventCode=1
+| search Image="*\\powershell.exe" CommandLine="*SOC_SIMULATION_SUSPICIOUS_TEST*"
+| eval Investigation="Controlled PowerShell Simulation"
+| table _time host User Investigation Image ParentImage CommandLine ProcessId
+| sort 0 - _time
+
+NOTE:
+This labels matching events for reporting. It does not independently
+determine whether an event is malicious.
+
+
+20. EVENT VOLUME BY HOST, SOURCE, AND SOURCETYPE
+======================================================================
+
+PURPOSE:
+Summarises telemetry volume to help check which hosts and event sources
+are contributing data.
+
+SPL:
+index=main
+| stats count by host source sourcetype
+| sort - count
+
+
+21. RECENT SYSMON PROCESS-CREATION EVENTS
+======================================================================
+
+PURPOSE:
+Displays the most recent process-creation events for manual investigation.
+
+SPL:
+index=main EventCode=1
+| table _time host User Image ParentImage CommandLine ProcessId
+| sort 0 - _time
+| head 50
+
+NOTE:
+Use a suitable time range in Splunk. If unrelated event sources also use
+EventCode=1, narrow this search to your Sysmon source or sourcetype.
+
+
+22. INVESTIGATION WORKFLOW
+======================================================================
+
+STEP 1:
+Confirm that events are arriving using index=main.
+
+STEP 2:
+Check source, host, and sourcetype to understand the collected telemetry.
+
+STEP 3:
+Filter the relevant Windows Security or Sysmon events.
+
+STEP 4:
+Use statistics and time buckets to identify activity requiring investigation.
+
+STEP 5:
+Inspect the original event, user, process image, parent image, command line,
+timestamp, and other available fields.
+
+STEP 6:
+Correlate related events and distinguish normal activity from suspicious
+activity before writing an investigation conclusion.
+
+STEP 7:
+Save the validated searches, document their purpose, and capture screenshots
+showing the relevant results.
+
+
+23. IMPORTANT PROJECT NOTES
+======================================================================
+
+- All searches use the main index unless otherwise stated.
+- Event availability depends on the configured Universal Forwarder inputs.
+- Source, sourcetype, host, and extracted field names must match actual events.
+- A failed-logon threshold is a triage signal, not conclusive evidence.
+- Encoded PowerShell is not automatically malicious.
+- Controlled simulation markers are specific to this lab.
+- Do not publish passwords, tokens, sensitive raw logs, or private information.
+- Retain only queries that you have validated against your actual lab data.
+
+END OF SPL QUERY COLLECTION
